@@ -41,6 +41,10 @@
     },
     {
       "behavior": "assembly",
+      "name": "Avalonia.Themes.Fluent.dll"
+    },
+    {
+      "behavior": "assembly",
       "name": "CommunityToolkit.Mvvm.dll"
     },
     {
