@@ -25,7 +25,7 @@ jobs:
       run: dotnet tool install --global DotNetCompress --version 2.0.0 --no-cache
 
     - name: Publish .NET Project
-      run: dotnet publish $PROJECT_PATH -c Debug -o debug --nologo
+      run: dotnet publish $PROJECT_PATH -c Debug -o debug
 
     - name: Change base-tag in index.html
       run: sed -i 's/<base href="\/" \/>/<base href="\/Ursa.Avalonia\/" \/>/g' $OUTPUT_PATH/index.html
