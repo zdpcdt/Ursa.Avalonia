@@ -11,11 +11,13 @@ using Ursa.Controls.OverlayShared;
 namespace Ursa.Controls;
 
 [TemplatePart(PART_CloseButton, typeof(Button))]
+[TemplatePart(PART_DragBorder, typeof(Border))]
 [TemplatePart(PART_TitleArea, typeof(Panel))]
 [PseudoClasses(PC_Modal, PC_FullScreen)]
 public abstract class DialogControlBase : OverlayFeedbackElement
 {
     public const string PART_CloseButton = "PART_CloseButton";
+    public const string PART_DragBorder = "PART_DragBorder";
     public const string PART_TitleArea = "PART_TitleArea";
     public const string PC_Modal = ":modal";
     public const string PC_FullScreen = ":full-screen";
@@ -30,6 +32,7 @@ public abstract class DialogControlBase : OverlayFeedbackElement
     protected internal Button? _closeButton;
 
     private bool _isFullScreen;
+    private Border? _dragBorder;
     private Panel? _titleArea;
     private bool _moveDragging;
     private Point _moveDragStartPoint;
@@ -69,8 +72,17 @@ public abstract class DialogControlBase : OverlayFeedbackElement
     {
         base.OnApplyTemplate(e);
         _titleArea = e.NameScope.Find<Panel>(PART_TitleArea);
+        _dragBorder = e.NameScope.Find<Border>(PART_DragBorder);
         if (GetCanDragMove(this))
         {
+            _dragBorder?.RemoveHandler(PointerMovedEvent, OnTitlePointerMove);
+            _dragBorder?.RemoveHandler(PointerPressedEvent, OnTitlePointerPressed);
+            _dragBorder?.RemoveHandler(PointerReleasedEvent, OnTitlePointerRelease);
+
+            _dragBorder?.AddHandler(PointerMovedEvent, OnTitlePointerMove, RoutingStrategies.Bubble);
+            _dragBorder?.AddHandler(PointerPressedEvent, OnTitlePointerPressed, RoutingStrategies.Bubble);
+            _dragBorder?.AddHandler(PointerReleasedEvent, OnTitlePointerRelease, RoutingStrategies.Bubble);
+
             _titleArea?.RemoveHandler(PointerMovedEvent, OnTitlePointerMove);
             _titleArea?.RemoveHandler(PointerPressedEvent, OnTitlePointerPressed);
             _titleArea?.RemoveHandler(PointerReleasedEvent, OnTitlePointerRelease);
@@ -81,6 +93,7 @@ public abstract class DialogControlBase : OverlayFeedbackElement
         }
         else
         {
+            if (_dragBorder is not null) _dragBorder.IsHitTestVisible = false;
             if (_titleArea is not null) _titleArea.IsHitTestVisible = false;
         }
 
