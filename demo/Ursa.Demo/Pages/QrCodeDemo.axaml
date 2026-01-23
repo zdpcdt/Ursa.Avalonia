@@ -1,0 +1,30 @@
+<UserControl
+    x:Class="Ursa.Demo.Pages.QrCodeDemo"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:u="https://irihi.tech/ursa"
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    mc:Ignorable="d">
+    <Grid ColumnDefinitions="*, Auto">
+        <u:QRCode
+            Width="400"
+            Height="400"
+            CornerRadius="0"
+            Data="{Binding #text.Text}"
+            ErrorCorrection="{Binding #eccLevel.Value}" />
+        <u:Form Grid.Column="1" Width="300">
+            <TextBox
+                Name="text"
+                u:FormItem.Label="Data"
+                Text="Hello Avalonia" />
+            <u:EnumSelector
+                Name="eccLevel"
+                u:FormItem.Label="Error Correction Level"
+                EnumType="{x:Type u:EccLevel}"
+                Value="{x:Static u:EccLevel.Medium}" />
+        </u:Form>
+    </Grid>
+</UserControl>
