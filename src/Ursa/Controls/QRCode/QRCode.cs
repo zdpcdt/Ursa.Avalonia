@@ -1,10 +1,8 @@
-using System.Collections;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
-using Avalonia.Threading;
 using Gma.QrCodeNet.Encoding;
 
 namespace Ursa.Controls;
@@ -13,7 +11,7 @@ namespace Ursa.Controls;
 /// Avalonia implementation of a Quick Response code (QR Code) with smooth borders and support for gradient brushes
 /// For spec, see: https://www.swisseduc.ch/informatik/theoretische_informatik/qr_codes/docs/qr_standard.pdf
 /// </summary>
-public class QRCode : Control
+public partial class QRCode : Control
 {
     #region Properties
 
@@ -35,9 +33,27 @@ public class QRCode : Control
         Border.CornerRadiusProperty.AddOwner<QRCode>();
 
     /// <summary>
+    /// Property indicating the corner ratio for rounded QR code symbols.
+    /// Value ranges from 0.0 (sharp corners) to 1.0 (fully rounded).
+    /// Default is 0.5 (corner radius is half the symbol width).
+    /// </summary>
+    public static readonly StyledProperty<double> SymbolCornerRatioProperty =
+        AvaloniaProperty.Register<QRCode, double>(nameof(SymbolCornerRatio), 0.5, coerce: CoerceSymbolCornerRatio);
+
+    private static double CoerceSymbolCornerRatio(AvaloniaObject obj, double value)
+    {
+        return value switch
+        {
+            < 0.0 => 0.0,
+            > 0.5 => 0.5,
+            _ => value
+        };
+    }
+
+    /// <summary>
     /// Property indicating the Quiet Zone (distance between the edge of the control and where the data actually starts)
     /// 
-    /// Note: The Quiet Zone (aka Padding) is defined in the QC Code standard (ISO 18004) as the width of 4 modules on all
+    /// Note: The Quiet Zone (aka Padding) is defined in the QR Code standard (ISO 18004) as the width of 4 modules on all
     /// sides, but is implemented separately in this control.  Official support may wish to remove this property as adjusting
     /// it will technically make the generated QRCodes "non-standard".  This implementation does not currently concern itself
     /// with this as the code itself it not meant for public consumption.
@@ -89,6 +105,13 @@ public class QRCode : Control
         set => SetValue(CornerRadiusProperty, value);
     }
 
+    /// <inheritdoc cref="SymbolCornerRatioProperty" />
+    public double SymbolCornerRatio
+    {
+        get => GetValue(SymbolCornerRatioProperty);
+        set => SetValue(SymbolCornerRatioProperty, value);
+    }
+
     /// <inheritdoc cref="PaddingProperty" />
     public Thickness Padding
     {
@@ -125,30 +148,18 @@ public class QRCode : Control
     private static readonly QrEncoder QrCodeGenerator = new();
 
     /// <summary>
-    /// A cache of currently set bits in the bit matrix.  This is used to potentially speed up processing.
-    /// </summary>
-    private readonly Hashtable _setBitsTable = new();
-
-    /// <summary>
     /// A cache of the last encoded QRCode.  This is used to reuse the last generated data whenever a style property like Width, Height or Padding was changed.
     /// </summary>
-    private Gma.QrCodeNet.Encoding.QrCode? _encodedQrCode;
+    private QrCode? _encodedQrCode;
 
     // QRCode specs mandate a standard 4-symbol-sized space on each side of the data.  We support custom Padding and will ignore this zone when processing
     private int QuietZoneCount => IsQuietZoneEnabled ? 4 : 0;
     private int QuietMargin => QuietZoneCount * 2;
 
     /// <summary>
-    /// Defines the geometry of the previously displayed QRCode
-    /// </summary>
-    private (PathGeometry, double)? _oldQrCodeGeometry;
-
-    /// <summary>
     /// Defines the geometry of the currently displayed QRCode
     /// </summary>
-    private (PathGeometry, double)? _qrCodeGeometry;
-
-    private Task? _transitionTask;
+    private PathGeometry? _qrCodeGeometry;
 
     public QRCode()
     {
@@ -187,11 +198,8 @@ public class QRCode : Control
         // Generating the QRCode bit matrix if needed.
         if (_encodedQrCode is null)
         {
-            lock (_setBitsTable)
-                _setBitsTable.Clear();
-
             QrCodeGenerator.ErrorCorrectionLevel = ToQrCoderEccLevel(ErrorCorrection);
-            _encodedQrCode = string.IsNullOrEmpty(Data)? null: QrCodeGenerator.Encode(Data);
+            _encodedQrCode = string.IsNullOrEmpty(Data) ? null : QrCodeGenerator.Encode(Data);
         }
 
         switch (change.Property.Name)
@@ -203,28 +211,9 @@ public class QRCode : Control
             case nameof(IsQuietZoneEnabled):
             case nameof(ErrorCorrection):
             case nameof(Data):
+            case nameof(SymbolCornerRatio):
                 OnLayoutChanged(_encodedQrCode);
                 InvalidateVisual();
-                break;
-                // This is hard coded for now as I'm sure there is a better and more "Avalonia" way to transition between renders.
-                // Eventually, it may be a property of some sort.
-                if (_transitionTask == null || _transitionTask.IsCompleted)
-                {
-                    _transitionTask = Dispatcher.UIThread.Invoke(async () =>
-                    {
-                        while (_qrCodeGeometry is (_, < 1))
-                        {
-                            if (_qrCodeGeometry is var (newGeometry, newOpacity))
-                                _qrCodeGeometry = (newGeometry, Math.Min(1, newOpacity + 0.1));
-                            InvalidateVisual();
-                            // await Task.Delay(30);
-                        }
-
-                        _oldQrCodeGeometry = null;
-                        
-                    });
-                }
-
                 break;
         }
     }
@@ -233,24 +222,15 @@ public class QRCode : Control
     /// Raised whenever a property of the control changes that impacts the layout of the QRCode geometry
     /// </summary>
     /// <param name="qrCodeData">The QRCode Data with the underlying bit matrix</param>
-    private void OnLayoutChanged(Gma.QrCodeNet.Encoding.QrCode? qrCodeData)
+    private void OnLayoutChanged(QrCode? qrCodeData)
     {
-        /*
-         * The following code turns the QRCode bit matrix into a geometry path.  The path represents the SHAPE of the QRCode and
-         * thus is achieved maybe unintuitively by ensuring that the background covers the whole control and then "carving" out
-         * the areas where the foreground should appear.  In the case of the markers, pathing over a "carved" out area will
-         * re-add the background color and, indeed, create the ring effects in the finished render.
-         *
-         * This logic is in place to ensure that the the whole QRCode is contained in one "Geometry" object and will thus be
-         * rendered with one brush to support a gradient across the whole control if so desired.
-         */
-
         // Bounds of the entire control
         if (qrCodeData is null)
         {
             _qrCodeGeometry = null;
             return;
         }
+
         var bounds = new Rect(0, 0, Width, Height);
         var matrix = qrCodeData.Matrix;
         var columnCount = matrix.Width + QuietMargin;
@@ -261,48 +241,23 @@ public class QRCode : Control
             (Width - Padding.Left - Padding.Right) / columnCount,
             (Height - Padding.Top - Padding.Bottom) / rowCount
         );
+        var cornerRatio = SymbolCornerRatio;
 
         // QR Code Shape
         var geometry = new PathGeometry();
 
-        // The entire area is drawn here as the idea is to cover the control with the background brush and "carve" out the data showing the foreground
-        geometry.Figures!.Add(new PathFigure
-        {
-            Segments = new PathSegments
-            {
-                new LineSegment { Point = bounds.BottomLeft },
-                new LineSegment { Point = bounds.BottomRight },
-                new LineSegment { Point = bounds.TopRight }
-                // No need to have the additional line segment back to 0,0 as PathFigures are closed (IsClosed) by default and this segment will be assumed
-            }
-        });
-
         // Adds the three Position Detection Pattern
-        AddPositionDetectionPattern(geometry, bounds, symbolSize);
+        AddPositionDetectionPattern(geometry, bounds, symbolSize, cornerRatio);
 
         for (var row = 0; row < matrix.Height; row++)
         {
-            ProcessRow(geometry, matrix, row, symbolSize);
+            for (int column = 0; column < matrix.Width; column++)
+            {
+                ProcessSymbol(geometry, matrix, row, column, symbolSize, cornerRatio);
+            }
         }
 
-        _oldQrCodeGeometry = _qrCodeGeometry;
-        _qrCodeGeometry = (geometry, 1); // start at 0% opacity
-    }
-
-    /// <summary>
-    /// Processes a full row of the the bit matrix and adds geometry as needed
-    /// </summary>
-    /// <param name="geometry">Geometry of the QR Code</param>
-    /// <param name="bitMatrix">The bit matrix being processed</param>
-    /// <param name="row">The row to process</param>
-    /// <param name="symbolSize">The calculated size of each symbol</param>
-    private void ProcessRow(PathGeometry geometry, BitMatrix bitMatrix, int row, Size symbolSize)
-    {
-        // Loop through each item within the row
-        for (var column = 0; column < bitMatrix.Width; column++)
-        {
-            ProcessSymbol(geometry, bitMatrix, row, column, symbolSize);
-        }
+        _qrCodeGeometry = geometry;
     }
 
     /// <summary>
@@ -313,7 +268,14 @@ public class QRCode : Control
     /// <param name="row">The row to process</param>
     /// <param name="column">The column of the symbol being processed</param>
     /// <param name="symbolSize">The calculated size of each symbol</param>
-    private void ProcessSymbol(PathGeometry geometry, BitMatrix bitMatrix, int row, int column, Size symbolSize)
+    /// <param name="cornerRatio"></param>
+    private void ProcessSymbol(
+        PathGeometry geometry,
+        BitMatrix bitMatrix,
+        int row,
+        int column,
+        Size symbolSize,
+        double cornerRatio)
     {
         // The full bounds of the symbol
         var symbolBounds = new Rect(
@@ -322,311 +284,13 @@ public class QRCode : Control
             symbolSize.Width,
             symbolSize.Height
         );
-
-        if (ProcessSymbolIfSet(geometry, bitMatrix, row, column, symbolBounds))
-            return;
-
-        ProcessSymbolIfUnset(geometry, bitMatrix, row, column, symbolBounds);
-    }
-
-    /// <summary>
-    /// Processes a symbol if set and adds the required geometry.
-    /// </summary>
-    /// <param name="geometry">Geometry containing the QRCode Geometry</param>
-    /// <param name="bitMatrix">BitMatrix containing the data</param>
-    /// <param name="row">The row of the symbol being processed</param>
-    /// <param name="column">The column of the symbol being processed</param>
-    /// <param name="symbolBounds">The bounds of the symbol being processed</param>
-    /// <returns>True if the symbol was processed, otherwise false</returns>
-    private bool ProcessSymbolIfSet(PathGeometry geometry, BitMatrix bitMatrix, int row, int column, Rect symbolBounds)
-    {
-        // If not filled, no action required
-        if (!IsValid(bitMatrix, column, row))
-            return false;
-
-        var boundsRadius = symbolBounds.Size / 2;
-        var cornerFlags = GetSetSymbolCornerFlags(bitMatrix, row, column);
-        var figure = new PathFigure
-            { StartPoint = new Point(symbolBounds.Left, symbolBounds.Top + boundsRadius.Height) };
-
-        // Top Left
-        if ((cornerFlags & CornerFlags.TopLeft) != 0)
-        {
-            figure.Segments!.Add(new LineSegment { Point = symbolBounds.TopLeft });
-            figure.Segments!.Add(new LineSegment
-                { Point = new Point(symbolBounds.Left + boundsRadius.Width, symbolBounds.Top) });
-        }
-        else
-        {
-            figure.Segments!.Add(new ArcSegment
-            {
-                SweepDirection = SweepDirection.Clockwise,
-                Point = new Point(symbolBounds.Left + boundsRadius.Width, symbolBounds.Top),
-                Size = boundsRadius
-            });
-        }
-
-        // Top Right
-        if ((cornerFlags & CornerFlags.TopRight) != 0)
-        {
-            figure.Segments!.Add(new LineSegment { Point = symbolBounds.TopRight });
-            figure.Segments!.Add(new LineSegment
-                { Point = new Point(symbolBounds.Right, symbolBounds.Top + boundsRadius.Height) });
-        }
-        else
-        {
-            figure.Segments!.Add(new ArcSegment
-            {
-                SweepDirection = SweepDirection.Clockwise,
-                Point = new Point(symbolBounds.Right, symbolBounds.Top + boundsRadius.Height),
-                Size = boundsRadius
-            });
-        }
-
-        // Bottom Right
-        if ((cornerFlags & CornerFlags.BottomRight) != 0)
-        {
-            figure.Segments!.Add(new LineSegment { Point = symbolBounds.BottomRight });
-            figure.Segments!.Add(new LineSegment
-                { Point = new Point(symbolBounds.Right - boundsRadius.Width, symbolBounds.Bottom) });
-        }
-        else
-        {
-            figure.Segments!.Add(new ArcSegment
-            {
-                SweepDirection = SweepDirection.Clockwise,
-                Point = new Point(symbolBounds.Right - boundsRadius.Width, symbolBounds.Bottom),
-                Size = boundsRadius
-            });
-        }
-
-        // Bottom Left
-        if ((cornerFlags & CornerFlags.BottomLeft) != 0)
-        {
-            figure.Segments!.Add(new LineSegment { Point = symbolBounds.BottomLeft });
-            figure.Segments!.Add(new LineSegment { Point = figure.StartPoint });
-        }
-        else
-        {
-            figure.Segments!.Add(new ArcSegment
-            {
-                SweepDirection = SweepDirection.Clockwise,
-                Point = figure.StartPoint,
-                Size = boundsRadius
-            });
-        }
-
-        geometry.Figures?.Add(figure);
-        return true;
-    }
-
-    /// <summary>
-    /// Gets the corner flags indicating how a set symbol is to be processed
-    /// </summary>
-    /// <param name="bitMatrix">BitMatrix containing the data</param>
-    /// <param name="row">The row of the symbol being processed</param>
-    /// <param name="column">The column of the symbol being processed</param>
-    /// <returns>The corner flags for a set symbol</returns>
-    private CornerFlags GetSetSymbolCornerFlags(BitMatrix bitMatrix, int row, int column)
-    {
-        var flags = CornerFlags.None;
-
-        if (!IsValid(bitMatrix, column, row))
-            return flags;
-
-        if (IsValid(bitMatrix, column, row - 1) || IsValid(bitMatrix, column - 1, row))
-            flags |= CornerFlags.TopLeft;
-        if (IsValid(bitMatrix, column, row - 1) || IsValid(bitMatrix, column + 1, row))
-            flags |= CornerFlags.TopRight;
-        if (IsValid(bitMatrix, column, row + 1) || IsValid(bitMatrix, column + 1, row))
-            flags |= CornerFlags.BottomRight;
-        if (IsValid(bitMatrix, column, row + 1) || IsValid(bitMatrix, column - 1, row))
-            flags |= CornerFlags.BottomLeft;
-
-        return flags;
-    }
-
-    /// <summary>
-    /// Processes a symbol if unset and adds the required geometry.
-    /// </summary>
-    /// <param name="geometry">Geometry containing the QRCode Geometry</param>
-    /// <param name="bitMatrix">BitMatrix containing the data</param>
-    /// <param name="row">The row of the symbol being processed</param>
-    /// <param name="column">The column of the symbol being processed</param>
-    /// <param name="symbolBounds">The bounds of the symbol being processed</param>
-    private void ProcessSymbolIfUnset(PathGeometry geometry, BitMatrix bitMatrix, int row, int column,
-        Rect symbolBounds)
-    {
-        // If filled, no action required
         if (IsValid(bitMatrix, column, row))
-            return;
-
-        var cornerFlags = GetUnsetSymbolCornerFlags(bitMatrix, row, column);
-
-        // If there are no nearby bits set, there's no need to smooth corners
-        if (cornerFlags == CornerFlags.None)
-            return;
-
-        var boundsRadius = symbolBounds.Size / 2;
-
-        // Top Left
-        if ((cornerFlags & CornerFlags.TopLeft) != 0)
         {
-            var start = new Point(symbolBounds.Left, symbolBounds.Top + boundsRadius.Height);
-
-            geometry.Figures!.Add(new PathFigure
-            {
-                StartPoint = start,
-                Segments = new PathSegments
-                {
-                    new LineSegment { Point = symbolBounds.TopLeft },
-                    new LineSegment { Point = new Point(symbolBounds.Left + boundsRadius.Width, symbolBounds.Top) },
-                    new ArcSegment
-                    {
-                        SweepDirection = SweepDirection.CounterClockwise,
-                        Point = start,
-                        Size = boundsRadius
-                    }
-                }
-            });
+            ProcessSymbolIfSet(geometry, bitMatrix, row, column, symbolBounds, cornerRatio);
         }
-
-        // Top Right
-        if ((cornerFlags & CornerFlags.TopRight) != 0)
+        else
         {
-            var start = new Point(symbolBounds.Right - boundsRadius.Width, symbolBounds.Top);
-
-            geometry.Figures!.Add(new PathFigure
-            {
-                StartPoint = start,
-                Segments = new PathSegments
-                {
-                    new LineSegment { Point = symbolBounds.TopRight },
-                    new LineSegment { Point = new Point(symbolBounds.Right, symbolBounds.Top + boundsRadius.Height) },
-                    new ArcSegment
-                    {
-                        SweepDirection = SweepDirection.CounterClockwise,
-                        Point = start,
-                        Size = boundsRadius
-                    }
-                }
-            });
-        }
-
-        // Bottom Right
-        if ((cornerFlags & CornerFlags.BottomRight) != 0)
-        {
-            var start = new Point(symbolBounds.Right, symbolBounds.Bottom - boundsRadius.Height);
-
-            geometry.Figures!.Add(new PathFigure
-            {
-                StartPoint = start,
-                Segments = new PathSegments
-                {
-                    new LineSegment { Point = symbolBounds.BottomRight },
-                    new LineSegment { Point = new Point(symbolBounds.Right - boundsRadius.Width, symbolBounds.Bottom) },
-                    new ArcSegment
-                    {
-                        SweepDirection = SweepDirection.CounterClockwise,
-                        Point = start,
-                        Size = boundsRadius
-                    }
-                }
-            });
-        }
-
-        // Bottom Left
-        if ((cornerFlags & CornerFlags.BottomLeft) != 0)
-        {
-            var start = new Point(symbolBounds.Left + boundsRadius.Width, symbolBounds.Bottom);
-
-            geometry.Figures!.Add(new PathFigure
-            {
-                StartPoint = start,
-                Segments = new PathSegments
-                {
-                    new LineSegment { Point = symbolBounds.BottomLeft },
-                    new LineSegment { Point = new Point(symbolBounds.Left, symbolBounds.Bottom - boundsRadius.Height) },
-                    new ArcSegment
-                    {
-                        SweepDirection = SweepDirection.CounterClockwise,
-                        Point = start,
-                        Size = boundsRadius
-                    }
-                }
-            });
-        }
-    }
-
-    /// <summary>
-    /// Gets the corner flags indicating how an unset symbol is to be processed
-    /// </summary>
-    /// <param name="bitMatrix">BitMatrix containing the data</param>
-    /// <param name="row">The row of the symbol being processed</param>
-    /// <param name="column">The column of the symbol being processed</param>
-    /// <returns>The corner flags for an unset symbol</returns>
-    private CornerFlags GetUnsetSymbolCornerFlags(BitMatrix bitMatrix, int row, int column)
-    {
-        var flags = CornerFlags.None;
-
-        if (IsValid(bitMatrix, column, row))
-            return flags;
-
-        if (IsValid(bitMatrix, column, row - 1) && IsValid(bitMatrix, column - 1, row - 1) &&
-            IsValid(bitMatrix, column - 1, row))
-            flags |= CornerFlags.TopLeft;
-        if (IsValid(bitMatrix, column, row - 1) && IsValid(bitMatrix, column + 1, row - 1) &&
-            IsValid(bitMatrix, column + 1, row))
-            flags |= CornerFlags.TopRight;
-        if (IsValid(bitMatrix, column, row + 1) && IsValid(bitMatrix, column + 1, row + 1) &&
-            IsValid(bitMatrix, column + 1, row))
-            flags |= CornerFlags.BottomRight;
-        if (IsValid(bitMatrix, column, row + 1) && IsValid(bitMatrix, column - 1, row + 1) &&
-            IsValid(bitMatrix, column - 1, row))
-            flags |= CornerFlags.BottomLeft;
-
-        return flags;
-    }
-
-    /// <summary>
-    /// Returns whether or not the specified symbol should be considered "set"
-    /// </summary>
-    /// <param name="bitMatrix">BitMatrix containing the data</param>
-    /// <param name="x"></param>
-    /// <param name="y"></param>
-    /// <returns></returns>
-    private bool IsValid(BitMatrix bitMatrix, int x, int y)
-    {
-        // Validate bounds of the bit matrix
-        if (x < 0 || y < 0 || x >= bitMatrix.Width || y >= bitMatrix.Height)
-            return false;
-
-        var key = (x, y).GetHashCode();
-
-        lock (_setBitsTable)
-        {
-            if (_setBitsTable.ContainsKey(key))
-                return (bool)_setBitsTable[key]!;
-
-            // Top Left Marker
-            if (x < 8 && y < 8)
-                return (bool)(_setBitsTable[key] = false);
-            // Top Right Marker
-            if (x > bitMatrix.Width - 9 && y < 8)
-                return (bool)(_setBitsTable[key] = false);
-            // Bottom Left Marker
-            if (x < 8 && y > bitMatrix.Height - 9)
-                return (bool)(_setBitsTable[key] = false);
-
-            /*
-             * ToDo: You can add additional logic here to exclude an additional portion of data.
-             *  This is not supported in the example as careful consideration must be made to ensure
-             *  that the QRCode is still readable based on the ECC Level selected.  Additionally,
-             *  you may want to accept a path to render a logo in the center to make it fit with the
-             *  current design.
-             */
-
-            return (bool)(_setBitsTable[key] = bitMatrix[y, x]);
+            ProcessSymbolIfUnset(geometry, bitMatrix, row, column, symbolBounds, cornerRatio);
         }
     }
 
@@ -636,16 +300,14 @@ public class QRCode : Control
     /// <param name="geometry">Geometry containing the QRCode Geometry</param>
     /// <param name="bounds">Bounds of the control itself</param>
     /// <param name="symbolSize">The size of each symbol</param>
-    private void AddPositionDetectionPattern(PathGeometry geometry, Rect bounds, Size symbolSize)
+    /// <param name="cornerRatio"></param>
+    private void AddPositionDetectionPattern(PathGeometry geometry, Rect bounds, Size symbolSize, double cornerRatio)
     {
         // Pre-calculations to reduce the amount of repeat math
         var dataBounds = bounds
                          .Deflate(Padding)
                          .Deflate(new Thickness(symbolSize.Width * QuietZoneCount, symbolSize.Height * QuietZoneCount));
-        var markerSize = symbolSize * 7;
-        var markerRadiusSize = markerSize / 2;
         var twiceSymbolSize = symbolSize * 2;
-
         // Three Position Patters
         for (var i = 0; i < 3; i++)
         {
@@ -655,33 +317,55 @@ public class QRCode : Control
              * 1: Top-Right
              * 2: Bottom-Left
              */
-            var markerPosition = new Point(
+            var markerSize = symbolSize * 7;
+            var markerLeftTopPosition = new Point(
                 i == 1 ? dataBounds.Right - markerSize.Width : dataBounds.Left,
-                i == 2 ? dataBounds.Bottom - markerRadiusSize.Height : dataBounds.Top + markerRadiusSize.Height
+                i == 2 ? dataBounds.Bottom - markerSize.Height : dataBounds.Top
             );
-
-            // Starting position of the circles.  These are adjusted each loop to make them smaller and smaller
-            var startPoint = markerPosition;
-            var endPoint = startPoint.WithX(startPoint.X + markerSize.Width);
-            var arcSize = markerRadiusSize;
-
+            var arcSize = markerSize * SymbolCornerRatio;
+            
             // Three "rings" per marker
             for (var x = 0; x < 3; x++)
             {
+                var markerBounds = new Rect(markerLeftTopPosition, markerSize);
+
+                // Starting position of the circles.  These are adjusted each loop to make them smaller and smaller
+                var startPoint = new Point(
+                    markerLeftTopPosition.X,
+                    markerLeftTopPosition.Y + arcSize.Height
+                );
                 geometry.Figures!.Add(new PathFigure
                 {
                     StartPoint = startPoint,
-                    Segments = new PathSegments
-                    {
-                        new ArcSegment { Size = arcSize, Point = endPoint },
-                        new ArcSegment { Size = arcSize, Point = startPoint }
-                    }
+                    Segments =
+                    [
+                        new ArcSegment()
+                            { SweepDirection = SweepDirection.Clockwise, Size = arcSize, Point = new Point(markerBounds.Left + arcSize.Width, markerBounds.Top) },
+                        new LineSegment() { Point = new Point(markerBounds.Right - arcSize.Width, markerBounds.Top) },
+                        new ArcSegment()
+                        {
+                            SweepDirection = SweepDirection.Clockwise, Size = arcSize, Point = new Point(markerBounds.Right, markerBounds.Top + arcSize.Height)
+                        },
+                        new LineSegment()
+                            { Point = new Point(markerBounds.Right, markerBounds.Bottom - arcSize.Height) },
+                        new ArcSegment()
+                        {
+                            SweepDirection = SweepDirection.Clockwise, Size = arcSize, Point = new Point(markerBounds.Right - arcSize.Width, markerBounds.Bottom)
+                        },
+                        new LineSegment() { Point = new Point(markerBounds.Left + arcSize.Width, markerBounds.Bottom) },
+                        new ArcSegment()
+                        {
+                            SweepDirection = SweepDirection.Clockwise, Size = arcSize, Point = new Point(markerBounds.Left, markerBounds.Bottom - arcSize.Height)
+                        },
+                        new LineSegment() { Point = new Point(markerBounds.Left, markerBounds.Top + arcSize.Height) },
+                    ]
                 });
 
                 // Adjusts the "rings" to make them progressively smaller with each loop
-                startPoint = startPoint.WithX(startPoint.X + symbolSize.Width);
-                endPoint = endPoint.WithX(endPoint.X - symbolSize.Width);
-                arcSize -= twiceSymbolSize;
+                markerLeftTopPosition = new Point(markerLeftTopPosition.X + symbolSize.Width,
+                    markerLeftTopPosition.Y + symbolSize.Height);
+                markerSize -= twiceSymbolSize;
+                arcSize = markerSize * SymbolCornerRatio;
             }
         }
     }
@@ -698,28 +382,20 @@ public class QRCode : Control
         var bounds = new Rect(0, 0, Width, Height);
 
         // Rounded corners
-        context.PushClip(new RoundedRect(bounds, CornerRadius.TopLeft, CornerRadius.TopRight, CornerRadius.BottomRight,
-            CornerRadius.BottomLeft));
-
-        if (_oldQrCodeGeometry is var (oldGeometry, _))
+        using (context.PushClip(new RoundedRect(bounds, 
+                   CornerRadius.TopLeft, 
+                   CornerRadius.TopRight,
+                   CornerRadius.BottomRight,
+                   CornerRadius.BottomLeft)))
         {
-            // The foreground will show through as the qr code will be "cut out" of the background
-            context.DrawRectangle(Foreground, null, bounds);
-            // Render background over the foreground as the geometry has "cut outs" that allow the foreground to show through
-            context.DrawGeometry(Background, null, oldGeometry);
-        }
-
-        if (_qrCodeGeometry is var (newGeometry, newOpacity))
-        {
-            using var _ = context.PushOpacity(newOpacity);
-
-            // The foreground will show through as the qr code will be "cut out" of the background
-            context.DrawRectangle(Foreground, null, bounds);
-            // Render background over the foreground as the geometry has "cut outs" that allow the foreground to show through
-            context.DrawGeometry(Background, null, newGeometry);
+            if (_qrCodeGeometry is var newGeometry)
+            {
+                context.DrawRectangle(Background, null, bounds);
+                context.DrawGeometry(Foreground, null, newGeometry);
+            }
         }
     }
-    
+
     /// <summary>
     /// Converts from our EccLevel to the one used by whichever algorithm being used.
     /// This exists as an abstraction layer for if/when the package or namespace of the actual QR Generator changes so that breaking changes are not introduced  
@@ -748,30 +424,4 @@ public class QRCode : Control
         BottomRight = 1 << 2,
         BottomLeft = 1 << 3
     }
-}
-
-/// <summary>
-/// Indicates the level of error correction available in case of data loss or corruption.  The higher the correction level, the more data will be included in the QRCode
-/// </summary>
-public enum EccLevel
-{
-    /// <summary>
-    /// The lowest level of error correction where up to ~7% of data can be be recovered if lost and uses the least amount of symbols to represent the data
-    /// </summary>
-    Lowest,
-
-    /// <summary>
-    /// The standard level of error correction where up to ~15% of data can be be recovered if lost and represents a good compromise between a small size and reliability
-    /// </summary>
-    Medium,
-
-    /// <summary>
-    /// A high readability level of error correction where up to ~25% of data can be be recovered if lost but requires a larger footprint to represent the data
-    /// </summary>
-    Quality,
-
-    /// <summary>
-    /// The maximum level of error correction where up to ~30% of data can be be recovered if lost and represents the maximum achievable reliability
-    /// </summary>
-    Highest,
 }
