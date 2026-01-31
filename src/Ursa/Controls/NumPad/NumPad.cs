@@ -81,7 +81,7 @@ public class NumPad : TemplatedControl
 
     private static void OnTargetGotFocus(object? sender, GotFocusEventArgs e)
     {
-        if (sender is not InputElement) return;
+        if (sender is not InputElement element) return;
         var existing = OverlayDialog.Recall<NumPad>(null);
         if (existing is not null)
         {
@@ -90,8 +90,8 @@ public class NumPad : TemplatedControl
                 pv4Box.IsTargetByNumPad = false; // 取消 IPv4Box 的 NumPad 输入模式
             }
 
-            existing.Target = sender as InputElement;
-            existing._targetInnerText = FindTextBoxInTarget((sender as InputElement)!);
+            existing.Target = element;
+            existing._targetInnerText = FindTextBoxInTarget(element);
 
             if (existing.Target is IPv4Box pv4Box2)
             {
@@ -103,10 +103,15 @@ public class NumPad : TemplatedControl
 
         var numPad = new NumPad()
         {
-            Target = sender as InputElement,
-            _targetInnerText = FindTextBoxInTarget((sender as InputElement)!)
+            Target = element,
+            _targetInnerText = FindTextBoxInTarget(element)
         };
-        OverlayDialog.Show(numPad, new object(), options: BuildPositionedOptions((sender as Control)!));
+        var options = BuildPositionedOptions(element as Control) ?? new OverlayDialogOptions()
+        {
+            Buttons = DialogButton.None,
+            OnDialogControlClosed = (object? _, object? _) => { numPad.Target?.Focus(); }
+        };
+        OverlayDialog.Show(numPad, new object(), options: options);
     }
 
     public void ProcessClick(object o)
@@ -166,9 +171,14 @@ public class NumPad : TemplatedControl
         return null;
     }
 
-    private static OverlayDialogOptions BuildPositionedOptions(Control target)
+    private static OverlayDialogOptions? BuildPositionedOptions(Control? target)
     {
-        var topLevel = TopLevel.GetTopLevel(target)!;
+        var topLevel = TopLevel.GetTopLevel(target);
+        if (topLevel is null)
+        {
+            return null;
+        }
+
         var rect = GetTargetRect(target);
 
         var showBelow = CanShowBelow(rect, topLevel);
