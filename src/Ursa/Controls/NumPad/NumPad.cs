@@ -8,87 +8,20 @@ using Irihi.Avalonia.Shared.Helpers;
 
 namespace Ursa.Controls;
 
-public class NumPad: TemplatedControl
+public class NumPad : TemplatedControl
 {
-    public static readonly StyledProperty<InputElement?> TargetProperty = AvaloniaProperty.Register<NumPad, InputElement?>(
-        nameof(Target));
+    private const double estimatedNumPadWidth = 282; // 弹窗宽度（像素）
+    private const double estimatedNumPadHeight = 378; // 弹窗高度（像素）
 
-    public InputElement? Target
-    {
-        get => GetValue(TargetProperty);
-        set => SetValue(TargetProperty, value);
-    }
-
-    /// <summary>
-    /// Target 目标内部的 TextBox 控件 
-    /// </summary>
-    private TextBox? _targetInnerText;
+    public static readonly StyledProperty<InputElement?> TargetProperty =
+        AvaloniaProperty.Register<NumPad, InputElement?>(
+            nameof(Target));
 
     public static readonly StyledProperty<bool> NumModeProperty = AvaloniaProperty.Register<NumPad, bool>(
         nameof(NumMode), defaultValue: true);
 
-    public bool NumMode
-    {
-        get => GetValue(NumModeProperty);
-        set => SetValue(NumModeProperty, value);
-    }
-
     public static readonly AttachedProperty<bool> AttachProperty =
         AvaloniaProperty.RegisterAttached<NumPad, InputElement, bool>("Attach");
-
-    public static void SetAttach(InputElement obj, bool value) => obj.SetValue(AttachProperty, value);
-    public static bool GetAttach(InputElement obj) => obj.GetValue(AttachProperty);
-
-    static NumPad()
-    {
-        AttachProperty.Changed.AddClassHandler<InputElement, bool>(OnAttachNumPad);
-    }
-
-    private static void OnAttachNumPad(InputElement input, AvaloniaPropertyChangedEventArgs<bool> args)
-    {
-        if (args.NewValue.Value)
-        {
-            GotFocusEvent.AddHandler(OnTargetGotFocus, input);
-        }
-        else
-        {
-            GotFocusEvent.RemoveHandler(OnTargetGotFocus, input);
-        }
-    }
-
-    private static void OnTargetGotFocus(object? sender, GotFocusEventArgs e)
-    {
-        if (sender is not InputElement) return;
-        var existing = OverlayDialog.Recall<NumPad>(null);
-        if (existing is not null)
-        {
-            if(existing.Target is IPv4Box pv4Box)
-            {
-                pv4Box.IsTargetByNumPad = false; // 取消 IPv4Box 的 NumPad 输入模式
-            }
-            existing.Target = sender as InputElement;
-            existing._targetInnerText = FindTextBoxInTarget((sender as InputElement)!);
-
-            if (existing.Target is IPv4Box pv4Box2)
-            {
-                pv4Box2.IsTargetByNumPad = true;
-            }
-            return;
-        }
-        var numPad = new NumPad()
-        {
-            Target = sender as InputElement ,
-            _targetInnerText = FindTextBoxInTarget((sender as InputElement)!)
-        };
-        OverlayDialog.Show(numPad, new object(), options: new OverlayDialogOptions()
-        {
-            Buttons = DialogButton.None,
-            OnDialogControlClosed = (object? ss, object? e) =>
-            {
-                numPad.Target?.Focus();
-            }
-        });
-    }
 
     private static readonly Dictionary<Key, string> KeyInputMapping = new()
     {
@@ -109,10 +42,82 @@ public class NumPad: TemplatedControl
         [Key.Decimal] = ".",
     };
 
+    /// <summary>
+    /// Target 目标内部的 TextBox 控件
+    /// </summary>
+    private TextBox? _targetInnerText;
+
+    static NumPad()
+    {
+        AttachProperty.Changed.AddClassHandler<InputElement, bool>(OnAttachNumPad);
+    }
+
+    public InputElement? Target
+    {
+        get => GetValue(TargetProperty);
+        set => SetValue(TargetProperty, value);
+    }
+
+    public bool NumMode
+    {
+        get => GetValue(NumModeProperty);
+        set => SetValue(NumModeProperty, value);
+    }
+
+    public static void SetAttach(InputElement obj, bool value) => obj.SetValue(AttachProperty, value);
+    public static bool GetAttach(InputElement obj) => obj.GetValue(AttachProperty);
+
+    private static void OnAttachNumPad(InputElement input, AvaloniaPropertyChangedEventArgs<bool> args)
+    {
+        if (args.NewValue.Value)
+        {
+            GotFocusEvent.AddHandler(OnTargetGotFocus, input);
+        }
+        else
+        {
+            GotFocusEvent.RemoveHandler(OnTargetGotFocus, input);
+        }
+    }
+
+    private static void OnTargetGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        if (sender is not InputElement element) return;
+        var existing = OverlayDialog.Recall<NumPad>(null);
+        if (existing is not null)
+        {
+            if (existing.Target is IPv4Box pv4Box)
+            {
+                pv4Box.IsTargetByNumPad = false; // 取消 IPv4Box 的 NumPad 输入模式
+            }
+
+            existing.Target = element;
+            existing._targetInnerText = FindTextBoxInTarget(element);
+
+            if (existing.Target is IPv4Box pv4Box2)
+            {
+                pv4Box2.IsTargetByNumPad = true;
+            }
+
+            return;
+        }
+
+        var numPad = new NumPad()
+        {
+            Target = element,
+            _targetInnerText = FindTextBoxInTarget(element)
+        };
+        var options = BuildPositionedOptions(element as Control) ?? new OverlayDialogOptions()
+        {
+            Buttons = DialogButton.None,
+            OnDialogControlClosed = (object? _, object? _) => { numPad.Target?.Focus(); }
+        };
+        OverlayDialog.Show(numPad, new object(), options: options);
+    }
+
     public void ProcessClick(object o)
     {
         if (Target is null || o is not NumPadButton b) return;
-        var key = (b.NumMode ? b.NumKey : b.FunctionKey)?? Key.None;
+        var key = (b.NumMode ? b.NumKey : b.FunctionKey) ?? Key.None;
 
         // 如果存在内部为 TextBox 的目标控件，则使用该 TextBox 作为输入目标
         var realTarget = _targetInnerText ?? Target;
@@ -135,6 +140,7 @@ public class NumPad: TemplatedControl
             });
         }
     }
+
     /// <summary>
     /// 在目标控件中查找 TextBox 控件
     /// </summary>
@@ -163,5 +169,86 @@ public class NumPad: TemplatedControl
         }
 
         return null;
+    }
+
+    private static OverlayDialogOptions? BuildPositionedOptions(Control? target)
+    {
+        var topLevel = TopLevel.GetTopLevel(target);
+        if (topLevel is null)
+        {
+            return null;
+        }
+
+        var rect = GetTargetRect(target);
+
+        var showBelow = CanShowBelow(rect, topLevel);
+
+        // 默认：左对齐目标
+        var horizontalOffset = rect.Left;
+
+        // 判断右侧是否会溢出
+        var overflowRight = horizontalOffset + estimatedNumPadWidth > topLevel.Bounds.Width;
+
+        if (overflowRight)
+        {
+            // 改为右对齐目标
+            horizontalOffset = rect.Right - estimatedNumPadWidth;
+
+            // 3️⃣ 仍然溢出 → 贴右边界
+            if (horizontalOffset < 0)
+            {
+                horizontalOffset = topLevel.Bounds.Width - estimatedNumPadWidth;
+            }
+        }
+
+        // 最终兜底（防止负数）
+        horizontalOffset = Math.Max(0, horizontalOffset);
+
+        if (showBelow)
+        {
+            return new OverlayDialogOptions
+            {
+                Buttons = DialogButton.None,
+                CanLightDismiss = true,
+
+                HorizontalAnchor = HorizontalPosition.Left,
+                VerticalAnchor = VerticalPosition.Top,
+
+                HorizontalOffset = horizontalOffset,
+                VerticalOffset = rect.Bottom,
+
+                OnDialogControlClosed = (object? _, object? _) => target.Focus()
+            };
+        }
+        else
+        {
+            return new OverlayDialogOptions
+            {
+                Buttons = DialogButton.None,
+                CanLightDismiss = true,
+
+                HorizontalAnchor = HorizontalPosition.Left,
+                VerticalAnchor = VerticalPosition.Bottom,
+
+                HorizontalOffset = horizontalOffset,
+                VerticalOffset = topLevel.Bounds.Height - rect.Top,
+
+                OnDialogControlClosed = (object? _, object? _) => target.Focus()
+            };
+        }
+    }
+
+    private static Rect GetTargetRect(Control target)
+    {
+        var topLevel = TopLevel.GetTopLevel(target)!;
+        var pt = target.TranslatePoint(new Point(0, 0), topLevel);
+
+        return pt.HasValue ? new Rect(pt.Value, target.Bounds.Size) : default;
+    }
+
+    private static bool CanShowBelow(Rect targetRect, TopLevel topLevel)
+    {
+        var spaceBelow = topLevel.Bounds.Height - targetRect.Bottom;
+        return spaceBelow >= estimatedNumPadHeight;
     }
 }
